@@ -97,7 +97,7 @@ describe("Email delivery of verification and reset codes", () => {
   });
 
   it("reports an SMTP failure as EMAIL_SEND_FAILED", async () => {
-    configure({ EMAIL_PROVIDER: "smtp", SMTP_USER: "sender@gmail.com", SMTP_PASS: "wrong" });
+    configure({ OTP_MODE: "email", EMAIL_PROVIDER: "smtp", SMTP_USER: "sender@gmail.com", SMTP_PASS: "wrong" });
     smtpSend.mockRejectedValue(Object.assign(new Error("Invalid login"), { code: "EAUTH", responseCode: 535 }));
 
     const res = await register("smtpfail@example.com");
@@ -106,7 +106,7 @@ describe("Email delivery of verification and reset codes", () => {
   });
 
   it("uses the Resend API when selected", async () => {
-    configure({ EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "re_key", EMAIL_FROM: "codes@medlog.test" });
+    configure({ OTP_MODE: "email", EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "re_key", EMAIL_FROM: "codes@medlog.test" });
     fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
 
     const res = await register("resend@example.com");
@@ -119,7 +119,7 @@ describe("Email delivery of verification and reset codes", () => {
   });
 
   it("removes the new account when the code can't be sent, so the user can retry", async () => {
-    configure({ EMAIL_PROVIDER: "brevo", EMAIL_API_KEY: "bad", EMAIL_FROM: "no-reply@medlog.test" });
+    configure({ OTP_MODE: "email", EMAIL_PROVIDER: "brevo", EMAIL_API_KEY: "bad", EMAIL_FROM: "no-reply@medlog.test" });
     fetchMock.mockResolvedValue(new Response("unauthorized", { status: 401 }));
 
     const res = await register("fail@example.com");
@@ -153,6 +153,22 @@ describe("Email delivery of verification and reset codes", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("never emails in OTP_MODE=fixed, even outside production with SMTP configured", async () => {
+    configure({
+      NODE_ENV: "development",
+      OTP_MODE: "fixed",
+      EMAIL_PROVIDER: "smtp",
+      SMTP_USER: "sender@gmail.com",
+      SMTP_PASS: "apppassword",
+    });
+    smtpSend.mockRejectedValue(new Error("SMTP port blocked"));
+
+    const res = await register("render-dev@example.com");
+    expect(res.status).toBe(201);
+    expect(res.body.data.otpHint).toBe("1234");
+    expect(smtpSend).not.toHaveBeenCalled();
+  });
+
   it("refuses sign-up in production when email isn't configured", async () => {
     configure({ NODE_ENV: "production", OTP_MODE: "email" });
 
@@ -165,7 +181,7 @@ describe("Email delivery of verification and reset codes", () => {
   it("answers forgot-password the same way even if the email fails", async () => {
     await register("forgot@example.com");
     await request(app).post("/api/v1/auth/verify-otp").send({ email: "forgot@example.com", code: "1234" });
-    configure({ EMAIL_PROVIDER: "brevo", EMAIL_API_KEY: "k", EMAIL_FROM: "no-reply@medlog.test" });
+    configure({ OTP_MODE: "email", EMAIL_PROVIDER: "brevo", EMAIL_API_KEY: "k", EMAIL_FROM: "no-reply@medlog.test" });
     fetchMock.mockRejectedValue(new Error("network down"));
 
     const res = await request(app)

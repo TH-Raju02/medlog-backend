@@ -350,9 +350,9 @@ export class AuthService {
     };
   }
 
-  /** Emails the code, except in OTP_MODE=fixed in production or in development without an email setup. */
+  /** Emails the code, except in OTP_MODE=fixed (any NODE_ENV) or in development without an email setup. */
   private async deliverCode(email: string, code: string, purpose: CodePurpose) {
-    if (isProduction() && env.OTP_MODE === "fixed") return;
+    if (env.OTP_MODE === "fixed") return;
     if (!isProduction() && !isMailConfigured()) return;
     await sendCodeEmail(email, code, purpose);
   }

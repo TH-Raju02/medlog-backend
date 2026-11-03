@@ -8,7 +8,7 @@ const start = async () => {
   const app = createApp();
   const server = app.listen(env.PORT, () => {
     logger.info(`MedLog API listening on port ${env.PORT}`);
-    if (env.NODE_ENV === "production" && env.OTP_MODE === "fixed") {
+    if (env.OTP_MODE === "fixed") {
       logger.warn(
         "OTP_MODE=fixed: verification and reset codes are fixed and not emailed. Set OTP_MODE=email for real users."
       );
