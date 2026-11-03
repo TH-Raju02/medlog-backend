@@ -16,6 +16,9 @@ const hashToken = (token: string) =>
 
 const isProduction = () => env.NODE_ENV === "production";
 
+/** Codes come from DEFAULT_OTP and are returned to the app (not emailed) in development and in OTP_MODE=fixed. */
+const usesFixedCodes = () => !isProduction() || env.OTP_MODE === "fixed";
+
 const subscriptionView = (user: IUser) => {
   const sub = user.subscription;
   if (!sub || !sub.plan) return { status: "none" as const };
@@ -123,7 +126,7 @@ export class AuthService {
 
     return {
       user: sanitizeUser(user),
-      otpHint: isProduction() ? undefined : otpCode,
+      otpHint: usesFixedCodes() ? otpCode : undefined,
     };
   }
 
@@ -194,7 +197,7 @@ export class AuthService {
 
     return {
       message: "OTP sent",
-      otpHint: isProduction() ? undefined : otpCode,
+      otpHint: usesFixedCodes() ? otpCode : undefined,
     };
   }
 
@@ -223,7 +226,7 @@ export class AuthService {
 
     return {
       message: "If the email is registered, a code has been sent",
-      otpHint: isProduction() ? undefined : resetCode,
+      otpHint: usesFixedCodes() ? resetCode : undefined,
     };
   }
 
@@ -347,14 +350,15 @@ export class AuthService {
     };
   }
 
-  /** Emails the code. Outside production a missing email setup is fine: the fixed DEFAULT_OTP is used. */
+  /** Emails the code, except in OTP_MODE=fixed in production or in development without an email setup. */
   private async deliverCode(email: string, code: string, purpose: CodePurpose) {
-    if (!isMailConfigured() && !isProduction()) return;
+    if (isProduction() && env.OTP_MODE === "fixed") return;
+    if (!isProduction() && !isMailConfigured()) return;
     await sendCodeEmail(email, code, purpose);
   }
 
   private newCode() {
-    if (isProduction()) {
+    if (!usesFixedCodes()) {
       return String(crypto.randomInt(10 ** (OTP_LENGTH - 1), 10 ** OTP_LENGTH));
     }
     const digits = env.DEFAULT_OTP.replace(/\D/g, "").slice(0, OTP_LENGTH);

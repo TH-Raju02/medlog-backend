@@ -21,7 +21,7 @@ Health: `GET /api/v1/health`
 | admin@medlog.app | Admin123! | admin |
 | clinician@medlog.app | Clinician123! | clinician |
 
-Verification codes are 4 digits. In development, without email settings, the code is the first 4 digits of `DEFAULT_OTP`. In production, codes are random and emailed (see `EMAIL_*` in `.env.example`).
+Verification codes are 4 digits. With `OTP_MODE=fixed` (the default, for testing) and in development, the code is the first 4 digits of `DEFAULT_OTP`, it isn't emailed, and the API returns it as `otpHint` so the app shows it. With `OTP_MODE=email` in production, codes are random and emailed (see `EMAIL_*`/`SMTP_*` in `.env.example`).
 
 ## Scripts
 - `npm run dev` — watch mode

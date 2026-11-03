@@ -10,6 +10,7 @@ process.env.JWT_REFRESH_SECRET = "test-refresh-secret-change-me-32";
 process.env.ACCESS_TOKEN_TTL = "15m";
 process.env.REFRESH_TOKEN_TTL = "7d";
 process.env.DEFAULT_OTP = "1234";
+process.env.OTP_MODE = "";
 process.env.OTP_TTL_MINUTES = "10";
 process.env.CORS_ORIGIN = "*";
 process.env.LOG_LEVEL = "error";

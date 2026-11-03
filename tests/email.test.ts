@@ -41,6 +41,7 @@ describe("Email delivery of verification and reset codes", () => {
   it("emails a random code through Brevo in production and verifies with it", async () => {
     configure({
       NODE_ENV: "production",
+      OTP_MODE: "email",
       EMAIL_PROVIDER: "brevo",
       EMAIL_API_KEY: "test-key",
       EMAIL_FROM: "no-reply@medlog.test",
@@ -68,6 +69,7 @@ describe("Email delivery of verification and reset codes", () => {
   it("sends through Gmail SMTP with the app password", async () => {
     configure({
       NODE_ENV: "production",
+      OTP_MODE: "email",
       EMAIL_PROVIDER: "smtp",
       SMTP_HOST: "smtp.gmail.com",
       SMTP_PORT: 465,
@@ -126,8 +128,33 @@ describe("Email delivery of verification and reset codes", () => {
     expect(await User.countDocuments({ email: "fail@example.com" })).toBe(0);
   });
 
+  it("uses the fixed code and sends no email in production while OTP_MODE=fixed", async () => {
+    configure({
+      NODE_ENV: "production",
+      OTP_MODE: "fixed",
+      EMAIL_PROVIDER: "smtp",
+      SMTP_USER: "sender@gmail.com",
+      SMTP_PASS: "apppassword",
+    });
+
+    const res = await register("fixed@example.com");
+    expect(res.status).toBe(201);
+    expect(res.body.data.otpHint).toBe("1234");
+    const verify = await request(app)
+      .post("/api/v1/auth/verify-otp")
+      .send({ email: "fixed@example.com", code: "1234" });
+    expect(verify.status).toBe(200);
+
+    const forgot = await request(app)
+      .post("/api/v1/auth/forgot-password")
+      .send({ email: "fixed@example.com" });
+    expect(forgot.body.data.otpHint).toBe("1234");
+    expect(smtpSend).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("refuses sign-up in production when email isn't configured", async () => {
-    configure({ NODE_ENV: "production" });
+    configure({ NODE_ENV: "production", OTP_MODE: "email" });
 
     const res = await register("nomail@example.com");
     expect(res.status).toBe(503);
