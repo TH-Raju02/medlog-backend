@@ -1,6 +1,8 @@
 import { Types } from "mongoose";
 import { ApiError } from "../../utils/ApiError";
+import { findOwnedAdmission, ownedAdmissionFilter } from "../../utils/ownership";
 import { Admission } from "../admissions/admissions.model";
+import { Patient } from "../patients/patients.model";
 import { User } from "../auth/auth.model";
 import { Transfer, TransferStatus } from "./transfers.model";
 
@@ -34,10 +36,8 @@ export class TransfersService {
         filter.status = "completed";
         filter.$or = [{ requestedBy: me }, { toUser: me }];
         break;
-      case "all":
-        filter.$or = [{ requestedBy: me }, { toUser: me }];
-        break;
       default:
+        filter.$or = [{ requestedBy: me }, { toUser: me }];
         break;
     }
 
@@ -60,8 +60,11 @@ export class TransfersService {
     };
   }
 
-  async getById(id: string) {
-    const item = await Transfer.findById(id).populate(populateAll);
+  async getById(id: string, userId: string) {
+    const me = new Types.ObjectId(userId);
+    const item = await Transfer.findOne({ _id: id, $or: [{ requestedBy: me }, { toUser: me }] }).populate(
+      populateAll
+    );
     if (!item) throw new ApiError(404, "Transfer not found");
     return item;
   }
@@ -80,8 +83,7 @@ export class TransfersService {
     },
     userId: string
   ) {
-    const admission = await Admission.findById(data.admissionId);
-    if (!admission) throw new ApiError(404, "Admission not found");
+    const admission = await findOwnedAdmission(data.admissionId, userId);
     if (admission.status !== "active") {
       throw new ApiError(409, "Only active admissions can be transferred", { code: "NOT_ACTIVE" });
     }
@@ -153,11 +155,9 @@ export class TransfersService {
     await item.save();
 
     if (finalStatus === "completed") {
-      if (isHandoff) {
-        await Admission.findByIdAndUpdate(item.admission, {
-          $set: { assignedTo: item.toUser, ...(item.toSpecialty ? { specialty: item.toSpecialty } : {}) },
-        });
-      } else {
+      if (isHandoff && item.toUser) {
+        await this.moveToReceiver(item.patient, item.admission, item.requestedBy, item.toUser, item.toSpecialty);
+      } else if (!isHandoff) {
         await Admission.findByIdAndUpdate(item.admission, {
           $set: {
             status: "transferred",
@@ -169,6 +169,27 @@ export class TransfersService {
     }
 
     return item.populate(populateAll);
+  }
+
+  /**
+   * An accepted handover sends the whole patient file: the patient profile and every admission the sender
+   * holds for that patient move to the receiver, so both the current stay and its history follow the patient.
+   */
+  private async moveToReceiver(
+    patientId: Types.ObjectId,
+    admissionId: Types.ObjectId,
+    senderId: Types.ObjectId,
+    receiverId: Types.ObjectId,
+    receiverSpecialty?: string
+  ) {
+    await Admission.updateMany(
+      { patient: patientId, ...ownedAdmissionFilter(String(senderId)) },
+      { $set: { assignedTo: receiverId } }
+    );
+    await Admission.findByIdAndUpdate(admissionId, {
+      $set: { assignedTo: receiverId, ...(receiverSpecialty ? { specialty: receiverSpecialty } : {}) },
+    });
+    await Patient.findByIdAndUpdate(patientId, { $set: { owner: receiverId } });
   }
 }
 

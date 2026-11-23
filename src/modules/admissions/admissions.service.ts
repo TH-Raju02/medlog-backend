@@ -1,6 +1,12 @@
 import { Types } from "mongoose";
 import { ApiError } from "../../utils/ApiError";
 import { escapeRegex } from "../../utils/escapeRegex";
+import {
+  findOwnedAdmission,
+  findOwnedPatient,
+  ownedAdmissionFilter,
+  ownedPatientFilter,
+} from "../../utils/ownership";
 import { nextSequence } from "../../database/counter";
 import { patientsService } from "../patients/patients.service";
 import { Patient } from "../patients/patients.model";
@@ -36,20 +42,35 @@ export class AdmissionsService {
     },
     userId: string
   ) {
-    let patientId = data.patientId;
+    let patientId: Types.ObjectId | undefined;
 
-    if (!patientId && data.patient) {
-      const patient = await patientsService.create(data.patient, userId);
-      patientId = patient.id;
+    if (data.patientId) {
+      patientId = (await findOwnedPatient(data.patientId, userId))._id as Types.ObjectId;
+    } else if (data.patient) {
+      // The same Civil ID is the same person: reuse the profile instead of creating a duplicate.
+      const civilId = typeof data.patient.nationalId === "string" ? data.patient.nationalId.trim() : "";
+      const existing = civilId
+        ? await Patient.findOne({ nationalId: civilId, ...ownedPatientFilter(userId) }).sort({ createdAt: -1 })
+        : null;
+      if (existing) {
+        await this.assertNotAdmitted(existing._id as Types.ObjectId, userId);
+        existing.set(data.patient);
+        await existing.save();
+        patientId = existing._id as Types.ObjectId;
+      } else {
+        const patient = await patientsService.create(data.patient, userId);
+        patientId = patient._id as Types.ObjectId;
+      }
     }
 
     if (!patientId) {
       throw new ApiError(400, "Patient is required");
     }
+    await this.assertNotAdmitted(patientId, userId);
 
     const admission = await Admission.create({
       code: formatCode(await nextSequence("admission")),
-      patient: new Types.ObjectId(patientId),
+      patient: patientId,
       admissionDate: data.admissionDate ?? new Date(),
       chiefComplaint: data.chiefComplaint,
       diagnosis: data.diagnosis,
@@ -68,30 +89,34 @@ export class AdmissionsService {
     return admission.populate(populatePatient);
   }
 
-  async list(query: {
-    page: number;
-    limit: number;
-    status?: string;
-    specialty?: string;
-    patientId?: string;
-    search?: string;
-  }) {
-    const filter: Record<string, unknown> = {};
+  async list(
+    userId: string,
+    query: {
+      page: number;
+      limit: number;
+      status?: string;
+      specialty?: string;
+      patientId?: string;
+      search?: string;
+    }
+  ) {
+    const filter: Record<string, unknown> = { ...ownedAdmissionFilter(userId) };
     if (query.status) filter.status = query.status;
     if (query.specialty) filter.specialty = query.specialty;
-    if (query.patientId) filter.patient = query.patientId;
+    if (query.patientId) {
+      if (!Types.ObjectId.isValid(query.patientId)) throw new ApiError(400, "Invalid patient id");
+      filter.patient = new Types.ObjectId(query.patientId);
+    }
 
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), "i");
       const patients = await Patient.find({
-        $or: [
-          { firstName: pattern },
-          { lastName: pattern },
-          { mrn: pattern },
-          { nationalId: pattern },
-        ],
+        $or: [{ firstName: pattern }, { lastName: pattern }, { mrn: pattern }, { nationalId: pattern }],
       }).select("_id");
-      filter.patient = { $in: patients.map((p) => p._id) };
+      const ids = patients.map((p) => p._id);
+      filter.patient = query.patientId
+        ? { $in: ids.filter((id) => String(id) === query.patientId) }
+        : { $in: ids };
     }
 
     const skip = (query.page - 1) * query.limit;
@@ -115,14 +140,13 @@ export class AdmissionsService {
     };
   }
 
-  async getById(id: string) {
-    const admission = await Admission.findById(id).populate(populatePatient);
-    if (!admission) throw new ApiError(404, "Admission not found");
-    return admission;
+  async getById(id: string, userId: string) {
+    const admission = await findOwnedAdmission(id, userId);
+    return admission.populate(populatePatient);
   }
 
-  async update(id: string, data: Record<string, unknown>) {
-    await this.assertActive(id);
+  async update(id: string, data: Record<string, unknown>, userId: string) {
+    await this.assertActive(id, userId);
     const admission = await Admission.findByIdAndUpdate(
       id,
       { $set: data },
@@ -132,14 +156,14 @@ export class AdmissionsService {
     return admission;
   }
 
-  async remove(id: string) {
-    const admission = await Admission.findByIdAndDelete(id);
-    if (!admission) throw new ApiError(404, "Admission not found");
+  async remove(id: string, userId: string) {
+    const admission = await findOwnedAdmission(id, userId);
+    await admission.deleteOne();
     return admission;
   }
 
   async markReviewed(id: string, userId: string) {
-    await this.assertActive(id);
+    await this.assertActive(id, userId);
     const admission = await Admission.findByIdAndUpdate(
       id,
       { $set: { lastReviewedAt: new Date(), lastReviewedBy: new Types.ObjectId(userId) } },
@@ -149,8 +173,8 @@ export class AdmissionsService {
     return admission;
   }
 
-  async undoReview(id: string) {
-    await this.assertActive(id);
+  async undoReview(id: string, userId: string) {
+    await this.assertActive(id, userId);
     const admission = await Admission.findByIdAndUpdate(
       id,
       { $unset: { lastReviewedAt: 1, lastReviewedBy: 1 } },
@@ -165,6 +189,7 @@ export class AdmissionsService {
     data: {
       summary?: string;
       notes?: string;
+      medicalHistory?: string;
       counselingCompleted?: boolean;
       dischargedAt?: Date;
       medications?: Array<{
@@ -179,7 +204,7 @@ export class AdmissionsService {
     },
     userId: string
   ) {
-    const existing = await this.assertActive(id);
+    const existing = await this.assertActive(id, userId);
 
     if (data.medications?.length) {
       await HospitalMedication.insertMany(
@@ -202,6 +227,7 @@ export class AdmissionsService {
           dischargeCounseling: Boolean(data.counselingCompleted),
           ...(data.summary ? { dischargeSummary: data.summary } : {}),
           ...(data.notes ? { notes: data.notes } : {}),
+          ...(data.medicalHistory !== undefined ? { medicalHistory: data.medicalHistory } : {}),
         },
       },
       { new: true, runValidators: true }
@@ -211,15 +237,25 @@ export class AdmissionsService {
   }
 
   async handover(id: string, toUserId: string, userId: string, notes?: string) {
+    await findOwnedAdmission(id, userId);
     return transfersService.create(
       { admissionId: id, transferType: "handoff", toUserId, notes },
       userId
     );
   }
 
-  private async assertActive(id: string) {
-    const admission = await Admission.findById(id);
-    if (!admission) throw new ApiError(404, "Admission not found");
+  private async assertNotAdmitted(patientId: Types.ObjectId, userId: string) {
+    const active = await patientsService.activeAdmission(patientId, userId);
+    if (active) {
+      throw new ApiError(409, "This patient is already admitted. Open the current admission instead.", {
+        code: "PATIENT_ALREADY_ADMITTED",
+        errors: { admissionId: String(active._id) },
+      });
+    }
+  }
+
+  private async assertActive(id: string, userId: string) {
+    const admission = await findOwnedAdmission(id, userId);
     if (admission.status === "discharged") {
       throw new ApiError(409, "This admission is discharged and can no longer be edited", {
         code: "ADMISSION_DISCHARGED",

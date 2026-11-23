@@ -10,7 +10,7 @@ export const admissionsController = {
   }),
 
   list: asyncHandler(async (req: Request, res: Response) => {
-    const result = await admissionsService.list({
+    const result = await admissionsService.list(req.user!.id, {
       page: Number(req.query.page ?? 1),
       limit: Number(req.query.limit ?? 20),
       status: req.query.status as string | undefined,
@@ -22,17 +22,17 @@ export const admissionsController = {
   }),
 
   getById: asyncHandler(async (req: Request, res: Response) => {
-    const admission = await admissionsService.getById(req.params.id);
+    const admission = await admissionsService.getById(req.params.id, req.user!.id);
     return sendSuccess(res, admission, "Admission loaded");
   }),
 
   update: asyncHandler(async (req: Request, res: Response) => {
-    const admission = await admissionsService.update(req.params.id, req.body);
+    const admission = await admissionsService.update(req.params.id, req.body, req.user!.id);
     return sendSuccess(res, admission, "Admission updated");
   }),
 
   remove: asyncHandler(async (req: Request, res: Response) => {
-    await admissionsService.remove(req.params.id);
+    await admissionsService.remove(req.params.id, req.user!.id);
     return sendSuccess(res, null, "Admission deleted");
   }),
 
@@ -42,7 +42,7 @@ export const admissionsController = {
   }),
 
   undoReview: asyncHandler(async (req: Request, res: Response) => {
-    const admission = await admissionsService.undoReview(req.params.id);
+    const admission = await admissionsService.undoReview(req.params.id, req.user!.id);
     return sendSuccess(res, admission, "Review undone");
   }),
 

@@ -65,6 +65,9 @@ export class SubscriptionsService {
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      // Card only: hides Cash App Pay, bank and Klarna, which aren't available in Kuwait.
+      // Apple Pay and Google Pay are card wallets, so Checkout still offers them on supported devices.
+      allowed_payment_method_types: ["card"],
       customer_email: user.email,
       client_reference_id: user.id,
       metadata: { userId: user.id, plan },

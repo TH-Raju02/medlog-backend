@@ -5,7 +5,10 @@ export interface IReference extends Document {
   kind: "file" | "folder";
   parent?: Types.ObjectId | null;
   file?: {
-    storedName: string;
+    /** GridFS file id (current storage). */
+    gridFsId?: Types.ObjectId;
+    /** Legacy: file name on the server's disk. */
+    storedName?: string;
     originalName: string;
     mimeType: string;
     size: number;
@@ -21,6 +24,7 @@ const referenceSchema = new Schema<IReference>(
     kind: { type: String, enum: ["file", "folder"], required: true },
     parent: { type: Schema.Types.ObjectId, ref: "Reference", default: null, index: true },
     file: {
+      gridFsId: { type: Schema.Types.ObjectId },
       storedName: { type: String },
       originalName: { type: String },
       mimeType: { type: String },
@@ -33,7 +37,10 @@ const referenceSchema = new Schema<IReference>(
     toJSON: {
       transform: (_doc, ret: Record<string, unknown>) => {
         const file = ret.file as Record<string, unknown> | undefined;
-        if (file) delete file.storedName;
+        if (file) {
+          delete file.storedName;
+          delete file.gridFsId;
+        }
         return ret;
       },
     },

@@ -6,20 +6,17 @@ import { validateRequest } from "../../middlewares/validateRequest";
 import { uploadLimiter } from "../../middlewares/rateLimiter";
 import { ApiError } from "../../utils/ApiError";
 import { referencesController } from "./references.controller";
-import { newStoredName, referencesDir } from "./references.service";
 import {
   createFolderSchema,
   fileTokenSchema,
   idParamSchema,
   listReferencesSchema,
+  moveSchema,
   uploadFileSchema,
 } from "./references.validation";
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: referencesDir,
-    filename: (_req, _file, cb) => cb(null, newStoredName()),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype !== "application/pdf") {
@@ -55,6 +52,13 @@ router.post(
   upload.single("file"),
   validateRequest(uploadFileSchema),
   referencesController.upload
+);
+router.get("/folders", authorize("references:read"), referencesController.folders);
+router.patch(
+  "/:id/move",
+  authorize("references:create"),
+  validateRequest(moveSchema),
+  referencesController.move
 );
 router.get(
   "/:id/link",

@@ -56,9 +56,11 @@ export const labResultsRoutes = admissionScopedRouter({
   sort: { date: -1, createdAt: -1 },
   fields: {
     testName: z.string().min(1).max(200),
+    panel: text(80),
     date: z.coerce.date().optional(),
-    reference: text(200),
-    value: text(200),
+    reference: text(300),
+    value: text(500),
+    unit: text(60),
   },
 });
 

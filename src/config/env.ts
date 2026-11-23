@@ -14,7 +14,7 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default("*"),
   OTP_TTL_MINUTES: z.coerce.number().default(10),
   DEFAULT_OTP: z.string().default("1234"),
-  OTP_MODE: z.enum(["fixed", "email"]).default("fixed"),
+  OTP_MODE: z.enum(["fixed", "email"]).default("email"),
   LOG_LEVEL: z.string().default("info"),
   UPLOAD_DIR: z.string().default("uploads"),
   PUBLIC_API_URL: z.string().optional(),

@@ -65,18 +65,23 @@ export const Recommendation = model<IRecommendation>("Recommendation", recommend
 
 export interface ILabResult extends AdmissionScoped {
   testName: string;
+  /** Panel the test was entered from (RFT, LFT, CBC, ...). */
+  panel?: string;
   date?: Date;
   reference?: string;
   value?: string;
+  unit?: string;
 }
 
 const labResultSchema = new Schema<ILabResult>(
   {
     ...scoped,
     testName: { type: String, required: true, trim: true },
+    panel: { type: String },
     date: { type: Date },
     reference: { type: String },
     value: { type: String },
+    unit: { type: String },
   },
   { timestamps: true }
 );

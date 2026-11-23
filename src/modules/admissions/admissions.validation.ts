@@ -87,6 +87,7 @@ export const dischargeSchema = z.object({
     .object({
       summary: z.string().max(4000).optional(),
       notes: z.string().max(2000).optional(),
+      medicalHistory: z.string().max(4000).optional(),
       counselingCompleted: z.boolean().optional(),
       dischargedAt: z.coerce.date().optional(),
       medications: z.array(medicationRow).max(50).optional(),

@@ -115,7 +115,9 @@ describe("Email delivery of verification and reset codes", () => {
     expect(url).toBe("https://api.resend.com/emails");
     expect(init.headers.Authorization).toBe("Bearer re_key");
     expect(sentBody().to).toEqual(["resend@example.com"]);
-    expect(sentBody().text).toContain("1234");
+    // With email configured, a real code is emailed (even outside production) and never returned to the app.
+    expect(sentBody().text).toMatch(/\b\d{4}\b/);
+    expect(res.body.data.otpHint).toBeUndefined();
   });
 
   it("removes the new account when the code can't be sent, so the user can retry", async () => {

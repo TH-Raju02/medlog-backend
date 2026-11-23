@@ -1,3 +1,5 @@
+import { Types } from "mongoose";
+import { ownedAdmissionFilter, ownedAdmissionIds, ownedPatientFilter } from "../../utils/ownership";
 import { Admission } from "../admissions/admissions.model";
 import { Patient } from "../patients/patients.model";
 import { Transfer } from "../transfers/transfers.model";
@@ -14,9 +16,11 @@ const monthRange = (month?: string) => {
 };
 
 export class DashboardService {
-  async metrics(month?: string) {
+  async metrics(userId: string, month?: string) {
     const { start, end, key } = monthRange(month);
     const inMonth = { $gte: start, $lt: end };
+    const mine = ownedAdmissionFilter(userId);
+    const myAdmissions = { admission: { $in: await ownedAdmissionIds(userId) } };
 
     const [
       medicationReconciliation,
@@ -29,19 +33,19 @@ export class DashboardService {
       currentAdmissions,
       specialtyBreakdown,
     ] = await Promise.all([
-      MedicationReconciliation.countDocuments({ createdAt: inMonth }),
-      Recommendation.countDocuments({ dtp: { $ne: "none" }, recordedAt: inMonth }),
-      Admission.countDocuments({ dischargeCounseling: true, dischargedAt: inMonth }),
-      Admission.countDocuments({ admissionDate: inMonth }),
-      Admission.countDocuments({ status: "active" }),
-      Patient.countDocuments(),
-      Transfer.countDocuments({ status: "pending" }),
-      Admission.find({ status: "active" })
+      MedicationReconciliation.countDocuments({ ...myAdmissions, createdAt: inMonth }),
+      Recommendation.countDocuments({ ...myAdmissions, dtp: { $ne: "none" }, recordedAt: inMonth }),
+      Admission.countDocuments({ ...mine, dischargeCounseling: true, dischargedAt: inMonth }),
+      Admission.countDocuments({ ...mine, admissionDate: inMonth }),
+      Admission.countDocuments({ ...mine, status: "active" }),
+      Patient.countDocuments(ownedPatientFilter(userId)),
+      Transfer.countDocuments({ toUser: new Types.ObjectId(userId), status: "pending" }),
+      Admission.find({ ...mine, status: "active" })
         .populate("patient")
         .sort({ admissionDate: -1, createdAt: -1 })
         .limit(50),
       Admission.aggregate([
-        { $match: { status: "active" } },
+        { $match: { ...mine, status: "active" } },
         { $group: { _id: "$specialty", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
       ]),

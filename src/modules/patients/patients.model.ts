@@ -28,6 +28,8 @@ export interface IPatient extends Document {
   country: string;
   countryCode: string;
   notes?: string;
+  /** Responsible clinician; moves with an accepted handover. Falls back to createdBy when unset. */
+  owner?: Types.ObjectId;
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -64,6 +66,7 @@ const patientSchema = new Schema<IPatient>(
     country: { type: String, default: "Kuwait" },
     countryCode: { type: String, default: "KW" },
     notes: { type: String },
+    owner: { type: Schema.Types.ObjectId, ref: "User", index: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true }

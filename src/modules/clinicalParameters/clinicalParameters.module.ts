@@ -8,7 +8,8 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../utils/ApiResponse";
 import { ApiError } from "../../utils/ApiError";
 import { ClinicalParameter } from "./clinicalParameters.model";
-import { Admission } from "../admissions/admissions.model";
+import { loadWritableAdmission } from "../clinical/admissionScoped";
+import { scopedRecordFilter } from "../../utils/ownership";
 
 const createSchema = z.object({
   body: z.object({
@@ -39,6 +40,14 @@ const listSchema = z.object({
   }),
 });
 
+/** Edits are limited to records of the user's own, still-active admissions. */
+const assertWritable = async (id: string, userId: string) => {
+  if (!Types.ObjectId.isValid(id)) throw new ApiError(400, "Invalid id");
+  const existing = await ClinicalParameter.findById(id).select("admission");
+  if (!existing) throw new ApiError(404, "Clinical parameter not found");
+  await loadWritableAdmission(String(existing.admission), userId);
+};
+
 const router = Router();
 router.use(authenticate);
 
@@ -49,9 +58,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const page = Number(req.query.page ?? 1);
     const limit = Number(req.query.limit ?? 50);
-    const filter: Record<string, unknown> = {};
-    if (req.query.admissionId) filter.admission = req.query.admissionId;
-    if (req.query.patientId) filter.patient = req.query.patientId;
+    const filter: Record<string, unknown> = await scopedRecordFilter(req.user!.id, {
+      admissionId: req.query.admissionId as string | undefined,
+      patientId: req.query.patientId as string | undefined,
+    });
 
     const [items, total] = await Promise.all([
       ClinicalParameter.find(filter)
@@ -75,8 +85,7 @@ router.post(
   authorize("clinical:create"),
   validateRequest(createSchema),
   asyncHandler(async (req, res) => {
-    const admission = await Admission.findById(req.body.admissionId);
-    if (!admission) throw new ApiError(404, "Admission not found");
+    const admission = await loadWritableAdmission(req.body.admissionId, req.user!.id);
 
     const item = await ClinicalParameter.create({
       admission: admission._id,
@@ -97,6 +106,7 @@ router.patch(
   authorize("clinical:update"),
   validateRequest(updateSchema),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const item = await ClinicalParameter.findByIdAndUpdate(
       req.params.id,
       { $set: req.body },
@@ -111,6 +121,7 @@ router.delete(
   "/:id",
   authorize("clinical:delete"),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const item = await ClinicalParameter.findByIdAndDelete(req.params.id);
     if (!item) throw new ApiError(404, "Clinical parameter not found");
     return sendSuccess(res, null, "Clinical parameter deleted");

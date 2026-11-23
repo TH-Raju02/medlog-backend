@@ -1,26 +1,46 @@
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
+import { Readable } from "stream";
 import jwt from "jsonwebtoken";
-import { Types } from "mongoose";
+import mongoose, { Types } from "mongoose";
 import { env } from "../../config/env";
 import { ApiError } from "../../utils/ApiError";
 import { logger } from "../../utils/logger";
-import { Reference } from "./references.model";
+import { IReference, Reference } from "./references.model";
 
+/** Files uploaded before GridFS storage were written here; they are still served when present. */
 export const referencesDir = path.resolve(process.cwd(), env.UPLOAD_DIR, "references");
-fs.mkdirSync(referencesDir, { recursive: true });
-
-export const newStoredName = () => `${crypto.randomBytes(16).toString("hex")}.pdf`;
 
 const LINK_TTL = "10m";
 
-const removeStoredFile = (storedName?: string) => {
-  if (!storedName) return;
-  fs.promises.unlink(path.join(referencesDir, path.basename(storedName))).catch((error) => {
-    logger.warn("Could not remove reference file", { error: error.message });
-  });
+// PDFs live in MongoDB (GridFS) so they survive restarts of hosts with an ephemeral disk, such as Render.
+const bucket = () => {
+  const db = mongoose.connection.db;
+  if (!db) throw new ApiError(503, "Database is not connected");
+  return new mongoose.mongo.GridFSBucket(db, { bucketName: "referenceFiles" });
 };
+
+const removeStoredFile = async (file?: IReference["file"]) => {
+  if (!file) return;
+  try {
+    if (file.gridFsId) {
+      await bucket().delete(new Types.ObjectId(String(file.gridFsId)));
+    } else if (file.storedName) {
+      await fs.promises.unlink(path.join(referencesDir, path.basename(file.storedName)));
+    }
+  } catch (error) {
+    logger.warn("Could not remove reference file", { error: (error as Error).message });
+  }
+};
+
+const saveToGridFs = (buffer: Buffer, filename: string, mimeType: string) =>
+  new Promise<Types.ObjectId>((resolve, reject) => {
+    const upload = bucket().openUploadStream(filename, { metadata: { contentType: mimeType } });
+    Readable.from(buffer)
+      .pipe(upload)
+      .on("error", reject)
+      .on("finish", () => resolve(upload.id as Types.ObjectId));
+  });
 
 export class ReferencesService {
   async list(parentId?: string) {
@@ -36,11 +56,31 @@ export class ReferencesService {
     return { folder, items };
   }
 
-  private async assertFolder(parentId?: string) {
+  /** Every folder with its full path ("Antibiotics / Renal"), for the "Move to folder" picker. */
+  async folders() {
+    const folders = await Reference.find({ kind: "folder" }).select("name parent").lean();
+    const byId = new Map(folders.map((f) => [String(f._id), f]));
+    const pathOf = (id: string): string => {
+      const names: string[] = [];
+      let current = byId.get(id);
+      const seen = new Set<string>();
+      while (current && !seen.has(String(current._id))) {
+        seen.add(String(current._id));
+        names.unshift(current.name);
+        current = current.parent ? byId.get(String(current.parent)) : undefined;
+      }
+      return names.join(" / ");
+    };
+    return folders
+      .map((f) => ({ _id: String(f._id), name: f.name, parent: f.parent ? String(f.parent) : null, path: pathOf(String(f._id)) }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  private async assertFolder(parentId?: string | null) {
     if (!parentId) return null;
     const folder = await Reference.findOne({ _id: parentId, kind: "folder" });
     if (!folder) throw new ApiError(404, "Folder not found");
-    return folder._id;
+    return folder._id as Types.ObjectId;
   }
 
   async createFolder(name: string, parentId: string | undefined, userId: string) {
@@ -59,15 +99,16 @@ export class ReferencesService {
     parentId: string | undefined,
     userId: string
   ) {
+    const parent = await this.assertFolder(parentId);
+    const gridFsId = await saveToGridFs(file.buffer, file.originalname, file.mimetype);
     try {
-      const parent = await this.assertFolder(parentId);
       const displayName = (name || file.originalname).replace(/\.pdf$/i, "").trim() || "Document";
       return await Reference.create({
         name: displayName,
         kind: "file",
         parent,
         file: {
-          storedName: file.filename,
+          gridFsId,
           originalName: file.originalname,
           mimeType: file.mimetype,
           size: file.size,
@@ -75,9 +116,34 @@ export class ReferencesService {
         createdBy: new Types.ObjectId(userId),
       });
     } catch (error) {
-      removeStoredFile(file.filename);
+      await removeStoredFile({ gridFsId, originalName: "", mimeType: "", size: 0 });
       throw error;
     }
+  }
+
+  /** Moves a file or folder into another folder (or to the top level when `parentId` is null). */
+  async move(id: string, parentId: string | null) {
+    const item = await Reference.findById(id);
+    if (!item) throw new ApiError(404, "Item not found");
+    const target = await this.assertFolder(parentId);
+
+    if (target && item.kind === "folder") {
+      // A folder cannot be moved into itself or into one of its own subfolders.
+      let cursor: Types.ObjectId | null = target;
+      while (cursor) {
+        if (cursor.equals(item._id as Types.ObjectId)) {
+          throw new ApiError(400, "A folder cannot be moved into itself", { code: "INVALID_MOVE" });
+        }
+        const parent: { parent?: Types.ObjectId | null } | null = await Reference.findById(cursor)
+          .select("parent")
+          .lean();
+        cursor = parent?.parent ?? null;
+      }
+    }
+
+    item.parent = target;
+    await item.save();
+    return item;
   }
 
   async remove(id: string) {
@@ -85,21 +151,21 @@ export class ReferencesService {
     if (!root) throw new ApiError(404, "Item not found");
 
     const ids: Types.ObjectId[] = [root._id as Types.ObjectId];
-    const storedNames: string[] = [];
-    if (root.file?.storedName) storedNames.push(root.file.storedName);
+    const files: NonNullable<IReference["file"]>[] = [];
+    if (root.file) files.push(root.file);
 
     let frontier = root.kind === "folder" ? [root._id] : [];
     while (frontier.length) {
       const children = await Reference.find({ parent: { $in: frontier } });
       for (const child of children) {
         ids.push(child._id as Types.ObjectId);
-        if (child.file?.storedName) storedNames.push(child.file.storedName);
+        if (child.file) files.push(child.file);
       }
       frontier = children.filter((c) => c.kind === "folder").map((c) => c._id);
     }
 
     await Reference.deleteMany({ _id: { $in: ids } });
-    storedNames.forEach(removeStoredFile);
+    await Promise.all(files.map(removeStoredFile));
     return { deleted: ids.length };
   }
 
@@ -113,7 +179,8 @@ export class ReferencesService {
     return { viewUrl: base, downloadUrl: `${base}?download=1`, expiresIn: LINK_TTL };
   }
 
-  async resolveLink(token: string) {
+  /** Resolves a signed link to a readable PDF stream. */
+  async openLink(token: string): Promise<{ item: IReference; stream: Readable; size?: number }> {
     let payload: jwt.JwtPayload;
     try {
       payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as jwt.JwtPayload;
@@ -124,11 +191,22 @@ export class ReferencesService {
       throw new ApiError(401, "Invalid link", { code: "UNAUTHORIZED" });
     }
     const item = await Reference.findOne({ _id: payload.sub, kind: "file" });
-    if (!item?.file?.storedName) throw new ApiError(404, "File not found");
-    return {
-      item,
-      filePath: path.join(referencesDir, path.basename(item.file.storedName)),
-    };
+    const missing = () =>
+      new ApiError(404, "This file is no longer available. Please upload it again.", { code: "FILE_MISSING" });
+    if (!item?.file) throw missing();
+
+    if (item.file.gridFsId) {
+      const id = new Types.ObjectId(String(item.file.gridFsId));
+      const [stored] = await bucket().find({ _id: id }).toArray();
+      if (!stored) throw missing();
+      return { item, stream: bucket().openDownloadStream(id), size: stored.length };
+    }
+
+    const filePath = item.file.storedName
+      ? path.join(referencesDir, path.basename(item.file.storedName))
+      : "";
+    if (!filePath || !fs.existsSync(filePath)) throw missing();
+    return { item, stream: fs.createReadStream(filePath), size: fs.statSync(filePath).size };
   }
 }
 

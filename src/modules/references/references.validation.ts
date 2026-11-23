@@ -30,3 +30,8 @@ export const fileTokenSchema = z.object({
   params: z.object({ token: z.string().min(20).max(1000) }),
   query: z.object({ download: z.enum(["0", "1"]).optional() }),
 });
+
+export const moveSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ parentId: objectId.nullable().optional() }),
+});

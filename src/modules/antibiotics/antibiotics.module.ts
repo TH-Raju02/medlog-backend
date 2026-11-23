@@ -7,7 +7,8 @@ import { validateRequest } from "../../middlewares/validateRequest";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../utils/ApiResponse";
 import { ApiError } from "../../utils/ApiError";
-import { Admission } from "../admissions/admissions.model";
+import { loadWritableAdmission } from "../clinical/admissionScoped";
+import { scopedRecordFilter } from "../../utils/ownership";
 
 /** Previous Antibiotics (not "Previous cultures") */
 const antibioticSchema = new Schema(
@@ -64,6 +65,14 @@ const listSchema = z.object({
   }),
 });
 
+/** Edits are limited to records of the user's own, still-active admissions. */
+const assertWritable = async (id: string, userId: string) => {
+  if (!Types.ObjectId.isValid(id)) throw new ApiError(400, "Invalid id");
+  const existing = await PreviousAntibiotic.findById(id).select("admission");
+  if (!existing) throw new ApiError(404, "Previous antibiotic not found");
+  await loadWritableAdmission(String(existing.admission), userId);
+};
+
 const router = Router();
 router.use(authenticate);
 
@@ -74,9 +83,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const page = Number(req.query.page ?? 1);
     const limit = Number(req.query.limit ?? 50);
-    const filter: Record<string, unknown> = {};
-    if (req.query.admissionId) filter.admission = req.query.admissionId;
-    if (req.query.patientId) filter.patient = req.query.patientId;
+    const filter: Record<string, unknown> = await scopedRecordFilter(req.user!.id, {
+      admissionId: req.query.admissionId as string | undefined,
+      patientId: req.query.patientId as string | undefined,
+    });
 
     const [items, total] = await Promise.all([
       PreviousAntibiotic.find(filter)
@@ -100,8 +110,7 @@ router.post(
   authorize("antibiotics:create"),
   validateRequest(createSchema),
   asyncHandler(async (req, res) => {
-    const admission = await Admission.findById(req.body.admissionId);
-    if (!admission) throw new ApiError(404, "Admission not found");
+    const admission = await loadWritableAdmission(req.body.admissionId, req.user!.id);
 
     const { admissionId: _admissionId, ...data } = req.body;
     const item = await PreviousAntibiotic.create({
@@ -120,6 +129,7 @@ router.patch(
   authorize("antibiotics:update"),
   validateRequest(updateSchema),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const item = await PreviousAntibiotic.findByIdAndUpdate(
       req.params.id,
       { $set: req.body },
@@ -134,6 +144,7 @@ router.delete(
   "/:id",
   authorize("antibiotics:delete"),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const item = await PreviousAntibiotic.findByIdAndDelete(req.params.id);
     if (!item) throw new ApiError(404, "Previous antibiotic not found");
     return sendSuccess(res, null, "Previous antibiotic deleted");

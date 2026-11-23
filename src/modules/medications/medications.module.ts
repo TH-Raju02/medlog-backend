@@ -7,7 +7,8 @@ import { validateRequest } from "../../middlewares/validateRequest";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../utils/ApiResponse";
 import { ApiError } from "../../utils/ApiError";
-import { Admission } from "../admissions/admissions.model";
+import { loadWritableAdmission } from "../clinical/admissionScoped";
+import { scopedRecordFilter } from "../../utils/ownership";
 import { HospitalMedication, MEDICATION_CATEGORIES } from "./medications.model";
 
 const fields = {
@@ -40,6 +41,14 @@ const listSchema = z.object({
   }),
 });
 
+/** Edits are limited to records of the user's own, still-active admissions. */
+const assertWritable = async (id: string, userId: string) => {
+  if (!Types.ObjectId.isValid(id)) throw new ApiError(400, "Invalid id");
+  const existing = await HospitalMedication.findById(id).select("admission");
+  if (!existing) throw new ApiError(404, "Hospital medication not found");
+  await loadWritableAdmission(String(existing.admission), userId);
+};
+
 const router = Router();
 router.use(authenticate);
 
@@ -50,9 +59,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const page = Number(req.query.page ?? 1);
     const limit = Number(req.query.limit ?? 50);
-    const filter: Record<string, unknown> = {};
-    if (req.query.admissionId) filter.admission = req.query.admissionId;
-    if (req.query.patientId) filter.patient = req.query.patientId;
+    const filter: Record<string, unknown> = await scopedRecordFilter(req.user!.id, {
+      admissionId: req.query.admissionId as string | undefined,
+      patientId: req.query.patientId as string | undefined,
+    });
     if (req.query.category === "hospital") {
       // Records created before categories existed are hospital medications.
       filter.category = { $in: ["hospital", null] };
@@ -82,8 +92,7 @@ router.post(
   authorize("medications:create"),
   validateRequest(createSchema),
   asyncHandler(async (req, res) => {
-    const admission = await Admission.findById(req.body.admissionId);
-    if (!admission) throw new ApiError(404, "Admission not found");
+    const admission = await loadWritableAdmission(req.body.admissionId, req.user!.id);
 
     const item = await HospitalMedication.create({
       admission: admission._id,
@@ -108,6 +117,7 @@ router.patch(
   authorize("medications:update"),
   validateRequest(updateSchema),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const { endDate, ...rest } = req.body as Record<string, unknown>;
     const update: Record<string, unknown> = { $set: rest };
     if (endDate === null) update.$unset = { endDate: 1 };
@@ -126,6 +136,7 @@ router.delete(
   "/:id",
   authorize("medications:delete"),
   asyncHandler(async (req, res) => {
+    await assertWritable(req.params.id, req.user!.id);
     const item = await HospitalMedication.findByIdAndDelete(req.params.id);
     if (!item) throw new ApiError(404, "Hospital medication not found");
     return sendSuccess(res, null, "Hospital medication deleted");

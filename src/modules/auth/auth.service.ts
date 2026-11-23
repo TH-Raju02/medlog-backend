@@ -16,8 +16,11 @@ const hashToken = (token: string) =>
 
 const isProduction = () => env.NODE_ENV === "production";
 
-/** Codes come from DEFAULT_OTP and are returned to the app (not emailed) in development and in OTP_MODE=fixed. */
-const usesFixedCodes = () => !isProduction() || env.OTP_MODE === "fixed";
+/**
+ * Codes are emailed. They come from DEFAULT_OTP and are returned to the app instead only in OTP_MODE=fixed,
+ * or in development/test when no email provider is configured.
+ */
+const usesFixedCodes = () => env.OTP_MODE === "fixed" || (!isProduction() && !isMailConfigured());
 
 const subscriptionView = (user: IUser) => {
   const sub = user.subscription;
@@ -350,10 +353,9 @@ export class AuthService {
     };
   }
 
-  /** Emails the code, except in OTP_MODE=fixed (any NODE_ENV) or in development without an email setup. */
+  /** Emails the code, except when fixed test codes are in use (see usesFixedCodes). */
   private async deliverCode(email: string, code: string, purpose: CodePurpose) {
-    if (env.OTP_MODE === "fixed") return;
-    if (!isProduction() && !isMailConfigured()) return;
+    if (usesFixedCodes()) return;
     await sendCodeEmail(email, code, purpose);
   }
 

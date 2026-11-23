@@ -1,6 +1,7 @@
 import { PipelineStage, Types } from "mongoose";
-import { ApiError } from "../../utils/ApiError";
 import { escapeRegex } from "../../utils/escapeRegex";
+import { findOwnedPatient, ownedAdmissionFilter, ownedPatientFilter } from "../../utils/ownership";
+import { Admission } from "../admissions/admissions.model";
 import { Patient } from "./patients.model";
 
 const generateMrn = () => {
@@ -13,24 +14,30 @@ type ListSort = "recent" | "name" | "admission";
 
 export class PatientsService {
   async create(data: Record<string, unknown>, userId: string) {
+    const me = new Types.ObjectId(userId);
     return Patient.create({
       ...data,
       mrn: generateMrn(),
-      createdBy: new Types.ObjectId(userId),
+      owner: me,
+      createdBy: me,
     });
   }
 
-  /** Patients with their most recent admission, for the Patients tab (status + admission date). */
-  async list(page: number, limit: number, search?: string, sort: ListSort = "recent") {
-    const match: Record<string, unknown> = {};
+  /** The user's patients with their most recent admission, for the Patients tab (status + admission date). */
+  async list(userId: string, page: number, limit: number, search?: string, sort: ListSort = "recent") {
+    const match: Record<string, unknown> = { ...ownedPatientFilter(userId) };
     if (search) {
       const pattern = new RegExp(escapeRegex(search), "i");
-      match.$or = [
-        { firstName: pattern },
-        { lastName: pattern },
-        { mrn: pattern },
-        { nationalId: pattern },
-        { fileNumber: pattern },
+      match.$and = [
+        {
+          $or: [
+            { firstName: pattern },
+            { lastName: pattern },
+            { mrn: pattern },
+            { nationalId: pattern },
+            { fileNumber: pattern },
+          ],
+        },
       ];
     }
 
@@ -89,29 +96,39 @@ export class PatientsService {
     };
   }
 
-  async lookupByCivilId(civilId: string) {
-    return Patient.findOne({ nationalId: civilId.trim() }).sort({ createdAt: -1 });
+  /** Finds the user's patient by Civil ID, with the active admission when the patient is still admitted. */
+  async lookupByCivilId(civilId: string, userId: string): Promise<Record<string, unknown> | null> {
+    const patient = await Patient.findOne({ nationalId: civilId.trim(), ...ownedPatientFilter(userId) }).sort({
+      createdAt: -1,
+    });
+    if (!patient) return null;
+    const active = await this.activeAdmission(patient._id as Types.ObjectId, userId);
+    return {
+      ...(patient.toJSON() as Record<string, unknown>),
+      activeAdmission: active ? { _id: active._id, code: active.code, admissionDate: active.admissionDate } : null,
+    };
   }
 
-  async getById(id: string) {
-    const patient = await Patient.findById(id);
-    if (!patient) throw new ApiError(404, "Patient not found");
+  async activeAdmission(patientId: Types.ObjectId, userId: string) {
+    return Admission.findOne({ patient: patientId, status: "active", ...ownedAdmissionFilter(userId) }).sort({
+      admissionDate: -1,
+    });
+  }
+
+  async getById(id: string, userId: string) {
+    return findOwnedPatient(id, userId);
+  }
+
+  async update(id: string, data: Record<string, unknown>, userId: string) {
+    const patient = await findOwnedPatient(id, userId);
+    patient.set(data);
+    await patient.save();
     return patient;
   }
 
-  async update(id: string, data: Record<string, unknown>) {
-    const patient = await Patient.findByIdAndUpdate(
-      id,
-      { $set: data },
-      { new: true, runValidators: true }
-    );
-    if (!patient) throw new ApiError(404, "Patient not found");
-    return patient;
-  }
-
-  async remove(id: string) {
-    const patient = await Patient.findByIdAndDelete(id);
-    if (!patient) throw new ApiError(404, "Patient not found");
+  async remove(id: string, userId: string) {
+    const patient = await findOwnedPatient(id, userId);
+    await patient.deleteOne();
     return patient;
   }
 }

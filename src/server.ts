@@ -2,9 +2,13 @@ import { createApp } from "./app";
 import { env } from "./config/env";
 import { connectDatabase, disconnectDatabase } from "./database/mongo";
 import { logger } from "./utils/logger";
+import { ensureSpecialties } from "./modules/specialties/specialties.module";
 
 const start = async () => {
   await connectDatabase();
+  await ensureSpecialties().catch((error) =>
+    logger.error("Could not create default specialties", { error: (error as Error).message })
+  );
   const app = createApp();
   const server = app.listen(env.PORT, () => {
     logger.info(`MedLog API listening on port ${env.PORT}`);

@@ -1,4 +1,3 @@
-import fs from "fs";
 import { Request, Response } from "express";
 import { env } from "../../config/env";
 import { asyncHandler } from "../../utils/asyncHandler";
@@ -41,14 +40,23 @@ export const referencesController = {
     return sendSuccess(res, link, "Link created");
   }),
 
+  folders: asyncHandler(async (_req: Request, res: Response) => {
+    const folders = await referencesService.folders();
+    return sendSuccess(res, folders, "Folders loaded");
+  }),
+
+  move: asyncHandler(async (req: Request, res: Response) => {
+    const item = await referencesService.move(req.params.id, req.body.parentId ?? null);
+    return sendSuccess(res, item, "Moved");
+  }),
+
   remove: asyncHandler(async (req: Request, res: Response) => {
     const result = await referencesService.remove(req.params.id);
     return sendSuccess(res, result, "Deleted");
   }),
 
   serveFile: asyncHandler(async (req: Request, res: Response) => {
-    const { item, filePath } = await referencesService.resolveLink(req.params.token);
-    if (!fs.existsSync(filePath)) throw new ApiError(404, "File not found");
+    const { item, stream, size } = await referencesService.openLink(req.params.token);
     const filename = `${item.name.replace(/[^\w\- ]+/g, "").trim() || "document"}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -56,6 +64,7 @@ export const referencesController = {
       `${req.query.download === "1" ? "attachment" : "inline"}; filename="${filename}"`
     );
     res.setHeader("Cache-Control", "private, no-store");
-    fs.createReadStream(filePath).pipe(res);
+    if (size !== undefined) res.setHeader("Content-Length", String(size));
+    stream.on("error", () => res.destroy()).pipe(res);
   }),
 };

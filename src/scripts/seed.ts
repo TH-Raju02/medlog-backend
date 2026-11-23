@@ -1,23 +1,9 @@
 import bcrypt from "bcryptjs";
 import { connectDatabase, disconnectDatabase } from "../database/mongo";
 import { User } from "../modules/auth/auth.model";
-import { Specialty } from "../modules/specialties/specialties.module";
+import { ensureSpecialties } from "../modules/specialties/specialties.module";
 import { Protocol } from "../modules/protocols/protocols.module";
 import { logger } from "../utils/logger";
-
-// Matches the specialty picker in the Figma "Change Specialty" dialog.
-const specialties = [
-  { name: "Internal Medicine", description: "Adult general medicine" },
-  { name: "ICU", description: "Intensive care unit" },
-  { name: "CCU", description: "Coronary care unit" },
-  { name: "NICU", description: "Neonatal intensive care unit" },
-  { name: "PICU", description: "Paediatric intensive care unit" },
-  { name: "Oncology", description: "Cancer care" },
-  { name: "Geriatric", description: "Care of older adults" },
-  { name: "Cardiology", description: "Heart and vascular care" },
-  { name: "Nephrology", description: "Kidney care" },
-  { name: "Pediatric", description: "Children's health" },
-];
 
 const seed = async () => {
   await connectDatabase();
@@ -58,12 +44,7 @@ const seed = async () => {
     { upsert: true, new: true }
   );
 
-  for (const specialty of specialties) {
-    await Specialty.findOneAndUpdate({ name: specialty.name }, specialty, {
-      upsert: true,
-      new: true,
-    });
-  }
+  await ensureSpecialties();
 
   await Protocol.findOneAndUpdate(
     { title: "Sepsis Early Recognition" },

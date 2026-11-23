@@ -7,6 +7,7 @@ import { validateRequest } from "../../middlewares/validateRequest";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../utils/ApiResponse";
 import { ApiError } from "../../utils/ApiError";
+import { DEFAULT_SPECIALTIES } from "../../constants/specialties";
 
 const specialtySchema = new Schema(
   {
@@ -20,6 +21,19 @@ const specialtySchema = new Schema(
 specialtySchema.index({ createdAt: -1 });
 
 const Specialty = model("Specialty", specialtySchema);
+
+/** Adds any default specialty that is missing; existing entries (and admin edits) are left alone. */
+export const ensureSpecialties = async () => {
+  await Specialty.bulkWrite(
+    DEFAULT_SPECIALTIES.map((s) => ({
+      updateOne: { filter: { name: s.name }, update: { $setOnInsert: { ...s, isActive: true } }, upsert: true },
+    }))
+  );
+};
+
+// "Other" is always listed last; everything else is alphabetical.
+const byName = (a: { name: string }, b: { name: string }) =>
+  a.name === "Other" ? 1 : b.name === "Other" ? -1 : a.name.localeCompare(b.name);
 
 const createSchema = z.object({
   body: z.object({
@@ -36,8 +50,8 @@ const router = Router();
 router.get(
   "/",
   asyncHandler(async (_req, res) => {
-    const items = await Specialty.find({ isActive: true }).select("name description").sort({ name: 1 });
-    return sendSuccess(res, items, "Specialties loaded");
+    const items = await Specialty.find({ isActive: true }).select("name description");
+    return sendSuccess(res, items.sort(byName), "Specialties loaded");
   })
 );
 

@@ -16,7 +16,7 @@ export const transfersController = {
   }),
 
   getById: asyncHandler(async (req: Request, res: Response) => {
-    const item = await transfersService.getById(req.params.id);
+    const item = await transfersService.getById(req.params.id, req.user!.id);
     return sendSuccess(res, item, "Transfer loaded");
   }),
 

@@ -8,7 +8,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../utils/ApiResponse";
 import { ApiError } from "../../utils/ApiError";
 import { Permission } from "../../constants/permissions";
-import { Admission } from "../admissions/admissions.model";
+import { findOwnedAdmission, scopedRecordFilter } from "../../utils/ownership";
 
 interface Options {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,10 +20,8 @@ interface Options {
   sort: Record<string, 1 | -1>;
 }
 
-const loadWritableAdmission = async (admissionId: string) => {
-  if (!Types.ObjectId.isValid(admissionId)) throw new ApiError(400, "Invalid admission id");
-  const admission = await Admission.findById(admissionId);
-  if (!admission) throw new ApiError(404, "Admission not found");
+export const loadWritableAdmission = async (admissionId: string, userId: string) => {
+  const admission = await findOwnedAdmission(admissionId, userId);
   if (admission.status === "discharged") {
     throw new ApiError(409, "This admission is discharged and can no longer be edited", {
       code: "ADMISSION_DISCHARGED",
@@ -73,9 +71,10 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     asyncHandler(async (req, res) => {
       const page = Number(req.query.page ?? 1);
       const limit = Number(req.query.limit ?? 100);
-      const filter: Record<string, unknown> = {};
-      if (req.query.admissionId) filter.admission = req.query.admissionId;
-      if (req.query.patientId) filter.patient = req.query.patientId;
+      const filter = await scopedRecordFilter(req.user!.id, {
+        admissionId: req.query.admissionId as string | undefined,
+        patientId: req.query.patientId as string | undefined,
+      });
       const [items, total] = await Promise.all([
         model.find(filter).sort(sort).skip((page - 1) * limit).limit(limit),
         model.countDocuments(filter),
@@ -95,7 +94,7 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     validateRequest(createSchema),
     asyncHandler(async (req, res) => {
       const { admissionId, ...data } = req.body;
-      const admission = await loadWritableAdmission(admissionId);
+      const admission = await loadWritableAdmission(admissionId, req.user!.id);
       const created = await model.create({
         ...data,
         admission: admission._id,
@@ -111,7 +110,7 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     authorize(permissions.create),
     validateRequest(bulkSchema),
     asyncHandler(async (req, res) => {
-      const admission = await loadWritableAdmission(req.body.admissionId);
+      const admission = await loadWritableAdmission(req.body.admissionId, req.user!.id);
       const createdBy = new Types.ObjectId(req.user!.id);
       const created = await model.insertMany(
         (req.body.items as Record<string, unknown>[]).map((data) => ({
@@ -130,7 +129,7 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     authorize(permissions.update),
     validateRequest(replaceSchema),
     asyncHandler(async (req, res) => {
-      const admission = await loadWritableAdmission(req.body.admissionId);
+      const admission = await loadWritableAdmission(req.body.admissionId, req.user!.id);
       const createdBy = new Types.ObjectId(req.user!.id);
       const rows = req.body.items as Array<Record<string, unknown> & { _id?: string }>;
       const keepIds = rows.filter((r) => r._id).map((r) => new Types.ObjectId(r._id));
@@ -157,7 +156,7 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     asyncHandler(async (req, res) => {
       const existing = await model.findById(req.params.id);
       if (!existing) throw new ApiError(404, `${label} not found`);
-      await loadWritableAdmission(String(existing.admission));
+      await loadWritableAdmission(String(existing.admission), req.user!.id);
       const updated = await model.findByIdAndUpdate(
         req.params.id,
         { $set: req.body },
@@ -174,7 +173,7 @@ export const admissionScopedRouter = ({ model, fields, label, permissions, sort 
     asyncHandler(async (req, res) => {
       const existing = await model.findById(req.params.id);
       if (!existing) throw new ApiError(404, `${label} not found`);
-      await loadWritableAdmission(String(existing.admission));
+      await loadWritableAdmission(String(existing.admission), req.user!.id);
       await existing.deleteOne();
       return sendSuccess(res, null, `${label} deleted`);
     })
